@@ -53,63 +53,84 @@ def get_embedding(text):
 
 
 def query_pinecone(vector, top_k=4):
-    """Query Pinecone for the most relevant chunks."""
-    response = requests.post(
-        f"{PINECONE_INDEX_HOST}/query",
-        headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
-        json={"vector": vector, "topK": top_k, "includeMetadata": True},
-        timeout=30,
-    )
-    response.raise_for_status()
-    matches = response.json().get("matches", [])
-    return [m.get("metadata", {}).get("text", "") for m in matches if m.get("metadata")]
+    """Query Pinecone for the most relevant chunks.
+    Returns an empty list (instead of raising) on any failure, so the chatbot still
+    answers using general knowledge rather than erroring out."""
+    try:
+        response = requests.post(
+            f"{PINECONE_INDEX_HOST}/query",
+            headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
+            json={"vector": vector, "topK": top_k, "includeMetadata": True},
+            timeout=30,
+        )
+        response.raise_for_status()
+        matches = response.json().get("matches", [])
+        return [m.get("metadata", {}).get("text", "") for m in matches if m.get("metadata")]
+    except Exception:
+        app.logger.exception("query_pinecone failed - continuing without retrieved context")
+        return []
 
 
 def get_chat_history(session_id, limit=10):
-    """Fetch recent chat history for this session from Supabase."""
-    conn = psycopg2.connect(DATABASE_URL)
+    """Fetch recent chat history for this session from Supabase.
+    Returns an empty list (instead of raising) if DATABASE_URL is missing or the
+    connection fails, so the chatbot still works without memory rather than erroring out."""
+    if not DATABASE_URL:
+        return []
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT message FROM n8n_chat_histories
-                WHERE session_id = %s
-                ORDER BY id DESC
-                LIMIT %s
-                """,
-                (session_id, limit),
-            )
-            rows = cur.fetchall()
-        return [row[0] for row in reversed(rows)]
-    finally:
-        conn.close()
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT message FROM n8n_chat_histories
+                    WHERE session_id = %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                    """,
+                    (session_id, limit),
+                )
+                rows = cur.fetchall()
+            return [row[0] for row in reversed(rows)]
+        finally:
+            conn.close()
+    except Exception:
+        app.logger.exception("get_chat_history failed - continuing without memory")
+        return []
 
 
 def save_message(session_id, message_type, content):
-    """Save a message (human or ai) to Supabase, matching the existing table structure."""
-    conn = psycopg2.connect(DATABASE_URL)
+    """Save a message (human or ai) to Supabase, matching the existing table structure.
+    Silently no-ops if DATABASE_URL is missing or the connection fails, so a DB issue
+    never breaks the actual chat response."""
+    if not DATABASE_URL:
+        return
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO n8n_chat_histories (session_id, message)
-                VALUES (%s, %s)
-                """,
-                (
-                    session_id,
-                    Json(
-                        {
-                            "type": message_type,
-                            "content": content,
-                            "additional_kwargs": {},
-                            "response_metadata": {},
-                        }
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO n8n_chat_histories (session_id, message)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        session_id,
+                        Json(
+                            {
+                                "type": message_type,
+                                "content": content,
+                                "additional_kwargs": {},
+                                "response_metadata": {},
+                            }
+                        ),
                     ),
-                ),
-            )
-        conn.commit()
-    finally:
-        conn.close()
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        app.logger.exception("save_message failed - continuing without saving")
 
 
 def call_gemini(user_message, context_chunks, history):
@@ -153,11 +174,14 @@ def chat():
         if not user_message:
             return jsonify({"output": "I didn't receive a message. Could you try again?"}), 400
 
-        # 1. Embed the user's question
-        vector = get_embedding(user_message)
-
-        # 2. Retrieve relevant chunks from Pinecone
-        context_chunks = query_pinecone(vector)
+        # 1. Embed the user's question (skip retrieval entirely if this fails)
+        context_chunks = []
+        try:
+            vector = get_embedding(user_message)
+            # 2. Retrieve relevant chunks from Pinecone
+            context_chunks = query_pinecone(vector)
+        except Exception:
+            app.logger.exception("Embedding step failed - continuing without retrieved context")
 
         # 3. Get recent chat history
         history = get_chat_history(session_id)
