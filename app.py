@@ -1,7 +1,8 @@
 """
 CRSIJ Chatbot Backend
 Lightweight Flask replacement for the n8n workflow.
-Flow: receive message -> retrieve relevant chunks from Pinecone -> call Gemini -> save to Supabase -> respond
+Flow: receive message -> retrieve relevant chunks from Pinecone -> call OpenRouter -> respond
+No database - each request is handled statelessly (no chat history stored).
 """
 
 import os
@@ -9,23 +10,25 @@ import json
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import psycopg2
-from psycopg2.extras import Json
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your chatbot's frontend (any origin, for now)
 
-# ---- CONFIG (set these as environment variables on your host) ----
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
+# ---- CONFIG (set these as environment variables on your host / Vercel project settings) ----
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+# Any OpenRouter model slug works here. Use a ":free" model if you want $0 cost,
+# e.g. "meta-llama/llama-3.1-8b-instruct:free" or "openrouter/free" (auto-router).
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
+
+# Optional but recommended by OpenRouter for attribution/rankings - not required to work.
+SITE_URL = os.environ.get("SITE_URL", "")
+SITE_NAME = os.environ.get("SITE_NAME", "CRSIJ Chatbot")
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medical-chatbot-xxxx.svc.xxxx.pinecone.io
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Hugging Face token for embeddings
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-
-DATABASE_URL = os.environ.get("DATABASE_URL")  # Supabase Postgres connection string
 
 SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
@@ -71,97 +74,42 @@ def query_pinecone(vector, top_k=4):
         return []
 
 
-def get_chat_history(session_id, limit=10):
-    """Fetch recent chat history for this session from Supabase.
-    Returns an empty list (instead of raising) if DATABASE_URL is missing or the
-    connection fails, so the chatbot still works without memory rather than erroring out."""
-    if not DATABASE_URL:
-        return []
-    try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT message FROM n8n_chat_histories
-                    WHERE session_id = %s
-                    ORDER BY id DESC
-                    LIMIT %s
-                    """,
-                    (session_id, limit),
-                )
-                rows = cur.fetchall()
-            return [row[0] for row in reversed(rows)]
-        finally:
-            conn.close()
-    except Exception:
-        app.logger.exception("get_chat_history failed - continuing without memory")
-        return []
-
-
-def save_message(session_id, message_type, content):
-    """Save a message (human or ai) to Supabase, matching the existing table structure.
-    Silently no-ops if DATABASE_URL is missing or the connection fails, so a DB issue
-    never breaks the actual chat response."""
-    if not DATABASE_URL:
-        return
-    try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO n8n_chat_histories (session_id, message)
-                    VALUES (%s, %s)
-                    """,
-                    (
-                        session_id,
-                        Json(
-                            {
-                                "type": message_type,
-                                "content": content,
-                                "additional_kwargs": {},
-                                "response_metadata": {},
-                            }
-                        ),
-                    ),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        app.logger.exception("save_message failed - continuing without saving")
-
-
-def call_gemini(user_message, context_chunks, history):
-    """Call Gemini API with system prompt, retrieved context, and chat history."""
+def call_openrouter(user_message, context_chunks):
+    """Call OpenRouter (OpenAI-compatible chat completions API) with system prompt
+    and retrieved context. No persistent chat history - each request is stateless."""
     context_text = "\n\n".join(context_chunks) if context_chunks else ""
 
-    contents = []
-    for msg in history:
-        role = "user" if msg.get("type") == "human" else "model"
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     final_user_text = user_message
     if context_text:
         final_user_text = f"Context:\n{context_text}\n\nQuestion: {user_message}"
 
-    contents.append({"role": "user", "parts": [{"text": final_user_text}]})
+    messages.append({"role": "user", "content": final_user_text})
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    if SITE_URL:
+        headers["HTTP-Referer"] = SITE_URL
+    if SITE_NAME:
+        headers["X-Title"] = SITE_NAME
 
     payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": contents,
+        "model": OPENROUTER_MODEL,
+        "messages": messages,
     }
 
     response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
-        headers={"Content-Type": "application/json"},
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers=headers,
         json=payload,
         timeout=60,
     )
     response.raise_for_status()
     data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    return data["choices"][0]["message"]["content"]
 
 
 @app.route("/webhook/chat", methods=["POST"])
@@ -183,15 +131,8 @@ def chat():
         except Exception:
             app.logger.exception("Embedding step failed - continuing without retrieved context")
 
-        # 3. Get recent chat history
-        history = get_chat_history(session_id)
-
-        # 4. Call Gemini
-        reply = call_gemini(user_message, context_chunks, history)
-
-        # 5. Save both messages to Supabase
-        save_message(session_id, "human", user_message)
-        save_message(session_id, "ai", reply)
+        # 3. Call OpenRouter (stateless - no chat history stored)
+        reply = call_openrouter(user_message, context_chunks)
 
         return jsonify({"output": reply})
 
