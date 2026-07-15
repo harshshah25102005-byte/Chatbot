@@ -2,7 +2,7 @@
 CRSIJ Chatbot Backend
 Lightweight Flask replacement for the n8n workflow.
 Flow: receive message -> retrieve relevant chunks from Pinecone -> call OpenRouter -> respond
-No database - each request is handled statelessly (no chat history stored).
+
 """
 
 import os
