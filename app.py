@@ -6,6 +6,7 @@ Flow: receive message -> retrieve relevant chunks from Pinecone -> call OpenRout
 
 import os
 import time
+import re
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -108,7 +109,7 @@ def call_openrouter(user_message, context_chunks):
         "model": OPENROUTER_MODEL,
         "messages": messages,
         "temperature": 0.3,   # lower = more focused/deterministic, less "creative" wandering
-        "max_tokens": 350,    # caps reply length - shorter output also means faster generation
+        "max_tokens": 300,    # caps reply length - shorter output also means faster generation
     }
 
     response = requests.post(
@@ -122,7 +123,14 @@ def call_openrouter(user_message, context_chunks):
     )
     response.raise_for_status()
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    reply = data["choices"][0]["message"]["content"]
+
+    # Some free models auto-picked by "openrouter/free" are "reasoning" models
+    # (e.g. DeepSeek R1) that output their internal thinking wrapped in tags
+    # before the real answer. Strip that out so only the final answer is shown.
+    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
+
+    return reply
 
 
 @app.route("/webhook/chat", methods=["POST"])
