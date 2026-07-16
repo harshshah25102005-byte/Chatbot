@@ -1,19 +1,24 @@
 """
 CRSIJ Chatbot Backend
-Lightweight Flask replacement for the n8n workflow.
-Flow: receive message -> retrieve relevant chunks from Pinecone -> call Gemini -> save to Supabase -> respond
+Lightweight Flask backend for the chatbot.
+Flow: receive message -> retrieve relevant chunks from Pinecone -> call OpenRouter -> respond
+(No chat memory/database - each message is answered independently using Pinecone context.)
 """
 
 import os
-import json
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import psycopg2
-from psycopg2.extras import Json
 
 app = Flask(__name__)
-CORS(app)  # allow requests from your chatbot's frontend (any origin, for now)
+
+# Only allow requests from your actual site - replace this with your real domain(s).
+# Include both with and without "www." if your site uses either.
+ALLOWED_ORIGINS = [
+    "https://YOUR-SITE-DOMAIN-HERE.com",
+    "https://www.YOUR-SITE-DOMAIN-HERE.com",
+]
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 
 # ---- CONFIG (set these as environment variables on your host) ----
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
@@ -26,8 +31,6 @@ PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medi
 
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Hugging Face token for embeddings
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-
-DATABASE_URL = os.environ.get("DATABASE_URL")  # Supabase Postgres connection string
 
 SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
@@ -48,7 +51,6 @@ def get_embedding(text):
     embedding = response.json()
     # Some HF endpoints return nested lists (token-level); average-pool if needed
     if isinstance(embedding[0], list):
-        vector_len = len(embedding[0])
         avg = [sum(col) / len(embedding) for col in zip(*embedding)]
         return avg
     return embedding
@@ -73,83 +75,19 @@ def query_pinecone(vector, top_k=4):
         return []
 
 
-def get_chat_history(session_id, limit=10):
-    """Fetch recent chat history for this session from Supabase.
-    Returns an empty list (instead of raising) if DATABASE_URL is missing or the
-    connection fails, so the chatbot still works without memory rather than erroring out."""
-    if not DATABASE_URL:
-        return []
-    try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT message FROM n8n_chat_histories
-                    WHERE session_id = %s
-                    ORDER BY id DESC
-                    LIMIT %s
-                    """,
-                    (session_id, limit),
-                )
-                rows = cur.fetchall()
-            return [row[0] for row in reversed(rows)]
-        finally:
-            conn.close()
-    except Exception:
-        app.logger.exception("get_chat_history failed - continuing without memory")
-        return []
-
-
-def save_message(session_id, message_type, content):
-    """Save a message (human or ai) to Supabase, matching the existing table structure.
-    Silently no-ops if DATABASE_URL is missing or the connection fails, so a DB issue
-    never breaks the actual chat response."""
-    if not DATABASE_URL:
-        return
-    try:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO n8n_chat_histories (session_id, message)
-                    VALUES (%s, %s)
-                    """,
-                    (
-                        session_id,
-                        Json(
-                            {
-                                "type": message_type,
-                                "content": content,
-                                "additional_kwargs": {},
-                                "response_metadata": {},
-                            }
-                        ),
-                    ),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        app.logger.exception("save_message failed - continuing without saving")
-
-
-def call_openrouter(user_message, context_chunks, history):
+def call_openrouter(user_message, context_chunks):
     """Call OpenRouter's chat completions API (OpenAI-compatible format) with
-    system prompt, retrieved context, and chat history."""
+    system prompt and retrieved context."""
     context_text = "\n\n".join(context_chunks) if context_chunks else ""
-
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for msg in history:
-        role = "user" if msg.get("type") == "human" else "assistant"
-        messages.append({"role": role, "content": msg.get("content", "")})
 
     final_user_text = user_message
     if context_text:
         final_user_text = f"Context:\n{context_text}\n\nQuestion: {user_message}"
 
-    messages.append({"role": "user", "content": final_user_text})
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": final_user_text},
+    ]
 
     payload = {
         "model": OPENROUTER_MODEL,
@@ -175,7 +113,6 @@ def chat():
     try:
         data = request.get_json(force=True)
         user_message = data.get("chatInput", "")
-        session_id = data.get("sessionId", "default-session")
 
         if not user_message:
             return jsonify({"output": "I didn't receive a message. Could you try again?"}), 400
@@ -189,15 +126,8 @@ def chat():
         except Exception:
             app.logger.exception("Embedding step failed - continuing without retrieved context")
 
-        # 3. Get recent chat history
-        history = get_chat_history(session_id)
-
-        # 4. Call OpenRouter
-        reply = call_openrouter(user_message, context_chunks, history)
-
-        # 5. Save both messages to Supabase
-        save_message(session_id, "human", user_message)
-        save_message(session_id, "ai", reply)
+        # 3. Call OpenRouter
+        reply = call_openrouter(user_message, context_chunks)
 
         return jsonify({"output": reply})
 
@@ -209,35 +139,6 @@ def chat():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
-
-
-@app.route("/debug-db-config", methods=["GET"])
-def debug_db_config():
-    """TEMPORARY debug route - shows the structure of DATABASE_URL without revealing
-    the actual password, so we can spot formatting issues. Remove this route once
-    the connection is working."""
-    if not DATABASE_URL:
-        return jsonify({"error": "DATABASE_URL is not set at all"})
-
-    masked = DATABASE_URL
-    try:
-        # postgresql://USER:PASSWORD@HOST:PORT/DB
-        after_scheme = DATABASE_URL.split("://", 1)[1]
-        userpass, hostpart = after_scheme.split("@", 1)
-        user, password = userpass.split(":", 1)
-        masked = f"postgresql://{user}:***MASKED({len(password)} chars)***@{hostpart}"
-    except Exception as e:
-        masked = f"COULD NOT PARSE: {str(e)} | raw_length={len(DATABASE_URL)}"
-
-    return jsonify({
-        "masked_url": masked,
-        "raw_length": len(DATABASE_URL),
-        "starts_with": DATABASE_URL[:15],
-        "ends_with": DATABASE_URL[-15:],
-        "has_leading_space": DATABASE_URL != DATABASE_URL.lstrip(),
-        "has_trailing_space": DATABASE_URL != DATABASE_URL.rstrip(),
-        "has_newline": "\n" in DATABASE_URL,
-    })
 
 
 if __name__ == "__main__":
