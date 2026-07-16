@@ -17,6 +17,7 @@ app = Flask(__name__)
 ALLOWED_ORIGINS = [
     "extraordinary-puffpuff-751ad7.netlify.app",
     "https://www.YOUR-SITE-DOMAIN-HERE.com",
+    "http://localhost:8000"
 ]
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 
