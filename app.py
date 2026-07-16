@@ -107,8 +107,8 @@ def call_openrouter(user_message, context_chunks):
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
-        "temperature": 0.3,   # lower = more focused/deterministic, less "creative" wandering
-        "max_tokens": 300,    # caps reply length - shorter output also means faster generation
+        "temperature": 0.2,   # lower = more focused/deterministic, less "creative" wandering
+        "max_tokens": 250,    # caps reply length - shorter output also means faster generation
     }
 
     response = requests.post(
