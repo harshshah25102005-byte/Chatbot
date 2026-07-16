@@ -1,10 +1,7 @@
 """
 CRSIJ Chatbot Backend
 Lightweight Flask replacement for the n8n workflow.
-Flow: receive message -> retrieve relevant chunks from Pinecone -> call OpenRouter -> respond
-No database - each request is handled statelessly (no chat history stored).
-/sync endpoint replaces the old n8n workflow: deletes all Pinecone vectors, then
-re-embeds and re-uploads fresh text sent from the Google Apps Script.
+Flow: receive message -> retrieve relevant chunks from Pinecone -> call Gemini -> save to Supabase -> respond
 """
 
 import os
@@ -12,25 +9,17 @@ import json
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import psycopg2
+from psycopg2.extras import Json
 
 app = Flask(__name__)
+CORS(app)  # allow requests from your chatbot's frontend (any origin, for now)
 
-# ---- ACCESS CONTROL: only allow your website to call this API ----
-# Set ALLOWED_ORIGIN to your site's exact origin, e.g. "https://www.yourjournalsite.com"
-# (no trailing slash, must include https://)
-ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "")
-
-CORS(app, origins=[ALLOWED_ORIGIN] if ALLOWED_ORIGIN else [], supports_credentials=False)
-
-# ---- CONFIG (set these as environment variables on your host / Vercel project settings) ----
+# ---- CONFIG (set these as environment variables on your host) ----
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 # Any OpenRouter model slug works here. Use a ":free" model if you want $0 cost,
 # e.g. "meta-llama/llama-3.1-8b-instruct:free" or "openrouter/free" (auto-router).
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
-
-# Optional but recommended by OpenRouter for attribution/rankings - not required to work.
-SITE_URL = os.environ.get("SITE_URL", "")
-SITE_NAME = os.environ.get("SITE_NAME", "CRSIJ Chatbot")
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medical-chatbot-xxxx.svc.xxxx.pinecone.io
@@ -38,11 +27,7 @@ PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medi
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Hugging Face token for embeddings
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Secret shared only between your Google Apps Script and this backend, used to
-# authorize the /sync endpoint (Apps Script calls don't send Origin/Referer
-# headers like a browser does, so the Origin check used for /webhook/chat
-# doesn't apply here - this endpoint needs its own check).
-SYNC_SECRET = os.environ.get("SYNC_SECRET", "")
+DATABASE_URL = os.environ.get("DATABASE_URL")  # Supabase Postgres connection string
 
 SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
@@ -88,27 +73,83 @@ def query_pinecone(vector, top_k=4):
         return []
 
 
-def call_openrouter(user_message, context_chunks):
-    """Call OpenRouter (OpenAI-compatible chat completions API) with system prompt
-    and retrieved context. No persistent chat history - each request is stateless."""
+def get_chat_history(session_id, limit=10):
+    """Fetch recent chat history for this session from Supabase.
+    Returns an empty list (instead of raising) if DATABASE_URL is missing or the
+    connection fails, so the chatbot still works without memory rather than erroring out."""
+    if not DATABASE_URL:
+        return []
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT message FROM n8n_chat_histories
+                    WHERE session_id = %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                    """,
+                    (session_id, limit),
+                )
+                rows = cur.fetchall()
+            return [row[0] for row in reversed(rows)]
+        finally:
+            conn.close()
+    except Exception:
+        app.logger.exception("get_chat_history failed - continuing without memory")
+        return []
+
+
+def save_message(session_id, message_type, content):
+    """Save a message (human or ai) to Supabase, matching the existing table structure.
+    Silently no-ops if DATABASE_URL is missing or the connection fails, so a DB issue
+    never breaks the actual chat response."""
+    if not DATABASE_URL:
+        return
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO n8n_chat_histories (session_id, message)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        session_id,
+                        Json(
+                            {
+                                "type": message_type,
+                                "content": content,
+                                "additional_kwargs": {},
+                                "response_metadata": {},
+                            }
+                        ),
+                    ),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        app.logger.exception("save_message failed - continuing without saving")
+
+
+def call_openrouter(user_message, context_chunks, history):
+    """Call OpenRouter's chat completions API (OpenAI-compatible format) with
+    system prompt, retrieved context, and chat history."""
     context_text = "\n\n".join(context_chunks) if context_chunks else ""
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for msg in history:
+        role = "user" if msg.get("type") == "human" else "assistant"
+        messages.append({"role": role, "content": msg.get("content", "")})
 
     final_user_text = user_message
     if context_text:
         final_user_text = f"Context:\n{context_text}\n\nQuestion: {user_message}"
 
     messages.append({"role": "user", "content": final_user_text})
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    if SITE_URL:
-        headers["HTTP-Referer"] = SITE_URL
-    if SITE_NAME:
-        headers["X-Title"] = SITE_NAME
 
     payload = {
         "model": OPENROUTER_MODEL,
@@ -117,7 +158,10 @@ def call_openrouter(user_message, context_chunks):
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
         json=payload,
         timeout=60,
     )
@@ -126,106 +170,8 @@ def call_openrouter(user_message, context_chunks):
     return data["choices"][0]["message"]["content"]
 
 
-def chunk_text(text, max_chars=1500, overlap=200):
-    """Split a long document into overlapping chunks so each one embeds cleanly
-    and retrieval can find the right paragraph. Splits on paragraph breaks first,
-    falling back to raw character slicing if a single paragraph is too long."""
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    chunks = []
-    current = ""
-
-    for para in paragraphs:
-        if len(current) + len(para) + 2 <= max_chars:
-            current = f"{current}\n\n{para}" if current else para
-        else:
-            if current:
-                chunks.append(current)
-            if len(para) > max_chars:
-                # Paragraph itself is too long - slice it with overlap
-                start = 0
-                while start < len(para):
-                    chunks.append(para[start:start + max_chars])
-                    start += max_chars - overlap
-                current = ""
-            else:
-                current = para
-
-    if current:
-        chunks.append(current)
-
-    return chunks
-
-
-def delete_all_vectors(namespace=""):
-    """Delete every vector in the given Pinecone namespace before re-uploading
-    fresh data, so old/removed content never lingers in the index."""
-    response = requests.post(
-        f"{PINECONE_INDEX_HOST}/vectors/delete",
-        headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
-        json={"deleteAll": True, "namespace": namespace},
-        timeout=30,
-    )
-    response.raise_for_status()
-
-
-def upsert_chunks(chunks, namespace=""):
-    """Embed each chunk and upsert it into Pinecone with the chunk text stored
-    as metadata (so query_pinecone can return the text directly, same as before)."""
-    batch_size = 50
-    vectors = []
-
-    for i, chunk in enumerate(chunks):
-        vector = get_embedding(chunk)
-        vectors.append({
-            "id": f"chunk-{i}",
-            "values": vector,
-            "metadata": {"text": chunk},
-        })
-
-    for i in range(0, len(vectors), batch_size):
-        batch = vectors[i:i + batch_size]
-        response = requests.post(
-            f"{PINECONE_INDEX_HOST}/vectors/upsert",
-            headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
-            json={"vectors": batch, "namespace": namespace},
-            timeout=60,
-        )
-        response.raise_for_status()
-
-    return len(vectors)
-
-
-
-def verify_origin():
-    """Reject any request that doesn't claim to come from ALLOWED_ORIGIN.
-    CORS alone only stops browsers from *reading* the response - it does not stop
-    curl/Postman/other servers from calling this endpoint directly. Checking the
-    Origin/Referer header blocks casual direct calls too. Note: a determined caller
-    can still fake these headers, so for real protection also rotate your
-    OpenRouter key if you ever see abuse, and consider adding a shared-secret
-    header (e.g. a value you also set in your frontend's fetch call) for stronger
-    protection than Origin/Referer checks alone."""
-    if not ALLOWED_ORIGIN:
-        # TEMPORARY: allow all origins if ALLOWED_ORIGIN isn't set correctly yet.
-        # This restores basic functionality immediately - re-enable the strict
-        # check once ALLOWED_ORIGIN is confirmed to exactly match your site.
-        return True
-
-    origin = request.headers.get("Origin", "")
-    referer = request.headers.get("Referer", "")
-
-    if origin == ALLOWED_ORIGIN:
-        return True
-    if referer.startswith(ALLOWED_ORIGIN):
-        return True
-    return False
-
-
 @app.route("/webhook/chat", methods=["POST"])
 def chat():
-    if not verify_origin():
-        return jsonify({"output": "Forbidden"}), 403
-
     try:
         data = request.get_json(force=True)
         user_message = data.get("chatInput", "")
@@ -243,44 +189,21 @@ def chat():
         except Exception:
             app.logger.exception("Embedding step failed - continuing without retrieved context")
 
-        # 3. Call OpenRouter (stateless - no chat history stored)
-        reply = call_openrouter(user_message, context_chunks)
+        # 3. Get recent chat history
+        history = get_chat_history(session_id)
+
+        # 4. Call OpenRouter
+        reply = call_openrouter(user_message, context_chunks, history)
+
+        # 5. Save both messages to Supabase
+        save_message(session_id, "human", user_message)
+        save_message(session_id, "ai", reply)
 
         return jsonify({"output": reply})
 
     except Exception as e:
         app.logger.exception("Error in /webhook/chat")
         return jsonify({"output": "Sorry, something went wrong on my end. Please try again in a moment."}), 500
-
-
-@app.route("/sync", methods=["POST"])
-def sync():
-    # Auth check: require the shared secret instead of Origin/Referer, since
-    # Apps Script's UrlFetchApp doesn't send those headers.
-    data = request.get_json(force=True, silent=True) or {}
-    provided_secret = request.headers.get("X-Sync-Secret") or data.get("secret", "")
-
-    if not SYNC_SECRET or provided_secret != SYNC_SECRET:
-        return jsonify({"status": "error", "message": "Forbidden"}), 403
-
-    document_text = data.get("text", "")
-    if not document_text.strip():
-        return jsonify({"status": "error", "message": "No document text provided"}), 400
-
-    try:
-        delete_all_vectors()
-    except Exception:
-        app.logger.exception("delete_all_vectors failed")
-        return jsonify({"status": "error", "message": "Failed to delete old Pinecone data"}), 500
-
-    try:
-        chunks = chunk_text(document_text)
-        count = upsert_chunks(chunks)
-    except Exception:
-        app.logger.exception("upsert_chunks failed")
-        return jsonify({"status": "error", "message": "Deleted old data, but failed to upload new data"}), 500
-
-    return jsonify({"status": "ok", "message": f"Synced {count} chunks to Pinecone"})
 
 
 @app.route("/health", methods=["GET"])
