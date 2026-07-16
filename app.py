@@ -26,7 +26,7 @@ CORS(app, origins=[ALLOWED_ORIGIN] if ALLOWED_ORIGIN else [], supports_credentia
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 # Any OpenRouter model slug works here. Use a ":free" model if you want $0 cost,
 # e.g. "meta-llama/llama-3.1-8b-instruct:free" or "openrouter/free" (auto-router).
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
 
 # Optional but recommended by OpenRouter for attribution/rankings - not required to work.
 SITE_URL = os.environ.get("SITE_URL", "")
