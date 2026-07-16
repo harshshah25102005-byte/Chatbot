@@ -5,6 +5,7 @@ Flow: receive message -> retrieve relevant chunks from Pinecone -> call OpenRout
 """
 
 import os
+import time
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -14,7 +15,7 @@ app = Flask(__name__)
 # Only allow requests from your actual site - replace this with your real domain(s).
 # Include both with and without "www." if your site uses either.
 ALLOWED_ORIGINS = [
-    "extraordinary-puffpuff-751ad7.netlify.app",
+    "https://extraordinary-puffpuff-751ad7.netlify.app",
     "https://www.YOUR-SITE-DOMAIN-HERE.com",
     "http://localhost:8000"
 ]
@@ -39,21 +40,35 @@ SYSTEM_PROMPT = (
 )
 
 
-def get_embedding(text):
-    """Get embedding vector from HuggingFace Inference API (same model used in Pinecone index)."""
-    response = requests.post(
-        f"https://router.huggingface.co/hf-inference/models/{HF_EMBEDDING_MODEL}/pipeline/feature-extraction",
-        headers={"Authorization": f"Bearer {HF_TOKEN}"},
-        json={"inputs": text},
-        timeout=30,
-    )
-    response.raise_for_status()
-    embedding = response.json()
-    # Some HF endpoints return nested lists (token-level); average-pool if needed
-    if isinstance(embedding[0], list):
-        avg = [sum(col) / len(embedding) for col in zip(*embedding)]
-        return avg
-    return embedding
+def get_embedding(text, max_retries=1):
+    """Get embedding vector from HuggingFace Inference API (same model used in Pinecone index).
+    HuggingFace's free inference API sometimes needs to "wake up" a model that's
+    been idle, causing a 504 on the first call. Short timeout + one retry means a
+    slow/cold model fails fast (worst case ~13 seconds) instead of making the user
+    wait a long time - the chat still answers fine without Pinecone context if
+    this ultimately fails."""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(
+                f"https://router.huggingface.co/hf-inference/models/{HF_EMBEDDING_MODEL}/pipeline/feature-extraction",
+                headers={"Authorization": f"Bearer {HF_TOKEN}"},
+                json={"inputs": text},
+                timeout=6,
+            )
+            response.raise_for_status()
+            embedding = response.json()
+            # Some HF endpoints return nested lists (token-level); average-pool if needed
+            if isinstance(embedding[0], list):
+                avg = [sum(col) / len(embedding) for col in zip(*embedding)]
+                return avg
+            return embedding
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                time.sleep(1)  # brief pause before the one retry
+                continue
+    raise last_error
 
 
 def query_pinecone(vector, top_k=4):
@@ -92,6 +107,8 @@ def call_openrouter(user_message, context_chunks):
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
+        "temperature": 0.3,   # lower = more focused/deterministic, less "creative" wandering
+        "max_tokens": 300,    # caps reply length - shorter output also means faster generation
     }
 
     response = requests.post(
