@@ -57,11 +57,13 @@ SYSTEM_PROMPT = (
 )
 
 
-def get_embedding(text, max_retries=2):
+def get_embedding(text, max_retries=1):
     """Get embedding vector from HuggingFace Inference API (same model used in Pinecone index).
     HuggingFace's free inference API sometimes needs to "wake up" a model that's
-    been idle, causing a 504 on the first call - retrying once or twice, right
-    after, usually succeeds because the model is warm by then."""
+    been idle, causing a 504 on the first call. We use a short timeout and just
+    one retry, so a slow/cold model fails fast (worst case ~13 seconds) instead
+    of making the user wait a long time - the chat still answers fine without
+    Pinecone context if this ultimately fails."""
     last_error = None
     for attempt in range(max_retries + 1):
         try:
@@ -69,7 +71,7 @@ def get_embedding(text, max_retries=2):
                 f"https://router.huggingface.co/hf-inference/models/{HF_EMBEDDING_MODEL}/pipeline/feature-extraction",
                 headers={"Authorization": f"Bearer {HF_TOKEN}"},
                 json={"inputs": text},
-                timeout=30,
+                timeout=6,
             )
             response.raise_for_status()
             embedding = response.json()
@@ -81,7 +83,7 @@ def get_embedding(text, max_retries=2):
         except Exception as e:
             last_error = e
             if attempt < max_retries:
-                time.sleep(1.5)  # brief pause before retrying, gives the model time to finish waking up
+                time.sleep(1)  # brief pause before the one retry
                 continue
     raise last_error
 
