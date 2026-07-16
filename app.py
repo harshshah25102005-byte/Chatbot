@@ -211,6 +211,35 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/debug-db-config", methods=["GET"])
+def debug_db_config():
+    """TEMPORARY debug route - shows the structure of DATABASE_URL without revealing
+    the actual password, so we can spot formatting issues. Remove this route once
+    the connection is working."""
+    if not DATABASE_URL:
+        return jsonify({"error": "DATABASE_URL is not set at all"})
+
+    masked = DATABASE_URL
+    try:
+        # postgresql://USER:PASSWORD@HOST:PORT/DB
+        after_scheme = DATABASE_URL.split("://", 1)[1]
+        userpass, hostpart = after_scheme.split("@", 1)
+        user, password = userpass.split(":", 1)
+        masked = f"postgresql://{user}:***MASKED({len(password)} chars)***@{hostpart}"
+    except Exception as e:
+        masked = f"COULD NOT PARSE: {str(e)} | raw_length={len(DATABASE_URL)}"
+
+    return jsonify({
+        "masked_url": masked,
+        "raw_length": len(DATABASE_URL),
+        "starts_with": DATABASE_URL[:15],
+        "ends_with": DATABASE_URL[-15:],
+        "has_leading_space": DATABASE_URL != DATABASE_URL.lstrip(),
+        "has_trailing_space": DATABASE_URL != DATABASE_URL.rstrip(),
+        "has_newline": "\n" in DATABASE_URL,
+    })
+
+
 if __name__ == "__main__":
     # Only used for local testing (python app.py).
     # Vercel imports the 'app' object directly and does not call this.
