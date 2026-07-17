@@ -94,8 +94,8 @@ def call_openrouter(user_message, context_chunks):
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
-        "temperature": OPENROUTER_TEMPERATURE,
-        "max_tokens": OPENROUTER_MAX_TOKENS,
+        "temperature": 0.2,
+        "max_tokens": 280,
     }
 
     response = requests.post(
