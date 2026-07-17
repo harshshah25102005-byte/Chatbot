@@ -15,7 +15,7 @@ app = Flask(__name__)
 # Include both with and without "www." if your site uses either.
 ALLOWED_ORIGINS = [
     "extraordinary-puffpuff-751ad7.netlify.app",
-    "https://digitaldb.in",
+    "https://www.YOUR-SITE-DOMAIN-HERE.com",
     "http://localhost:8000"
 ]
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
@@ -35,14 +35,7 @@ HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
     "tracking submissions, and publication charges. Use the provided context if relevant. "
-    "Do not mention your internal tools or data sources.\n\n"
-    "Formatting rules (follow strictly):\n"
-    "- Always respond in plain, well-structured paragraphs of normal prose.\n"
-    "- Do not use HTML tags of any kind (no <br>, <b>, <p>, <div>, etc.) anywhere in your reply.\n"
-    "- Do not use Markdown formatting either (no *, **, #, -, bullet points, or numbered lists) "
-    "unless the user explicitly asks for a list.\n"
-    "- For line breaks between paragraphs, use a normal newline character, not any tag or symbol.\n"
-    "- Keep answers concise: 2-4 sentences per paragraph, and avoid unnecessary repetition."
+    "Do not mention your internal tools or data sources."
 )
 
 
@@ -82,19 +75,6 @@ def query_pinecone(vector, top_k=4):
         return []
 
 
-def sanitize_reply(text):
-    """Belt-and-suspenders cleanup in case the model ignores the formatting rules
-    and still emits literal HTML break tags or other stray HTML."""
-    if not text:
-        return text
-    import re
-    # Replace common <br> variants with a real newline
-    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
-    # Strip any other leftover HTML tags just in case
-    text = re.sub(r"<[^>]+>", "", text)
-    return text.strip()
-
-
 def call_openrouter(user_message, context_chunks):
     """Call OpenRouter's chat completions API (OpenAI-compatible format) with
     system prompt and retrieved context."""
@@ -125,8 +105,7 @@ def call_openrouter(user_message, context_chunks):
     )
     response.raise_for_status()
     data = response.json()
-    raw_reply = data["choices"][0]["message"]["content"]
-    return sanitize_reply(raw_reply)
+    return data["choices"][0]["message"]["content"]
 
 
 @app.route("/webhook/chat", methods=["POST"])
