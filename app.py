@@ -25,6 +25,8 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 # Any OpenRouter model slug works here. Use a ":free" model if you want $0 cost,
 # e.g. "meta-llama/llama-3.1-8b-instruct:free" or "openrouter/free" (auto-router).
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
+OPENROUTER_TEMPERATURE = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.7"))
+OPENROUTER_MAX_TOKENS = int(os.environ.get("OPENROUTER_MAX_TOKENS", "500"))
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medical-chatbot-xxxx.svc.xxxx.pinecone.io
@@ -92,6 +94,8 @@ def call_openrouter(user_message, context_chunks):
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
+        "temperature": OPENROUTER_TEMPERATURE,
+        "max_tokens": OPENROUTER_MAX_TOKENS,
     }
 
     response = requests.post(
