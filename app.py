@@ -15,7 +15,7 @@ app = Flask(__name__)
 # Include both with and without "www." if your site uses either.
 ALLOWED_ORIGINS = [
     "extraordinary-puffpuff-751ad7.netlify.app",
-    "https://www.YOUR-SITE-DOMAIN-HERE.com",
+    "https://digitaldb.in",
     "http://localhost:8000"
 ]
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
