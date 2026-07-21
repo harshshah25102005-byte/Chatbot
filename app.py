@@ -8,7 +8,6 @@ import os
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import psycopg2
 
 app = Flask(__name__)
 
@@ -25,7 +24,7 @@ CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 # Any OpenRouter model slug works here. Use a ":free" model if you want $0 cost,
 # e.g. "meta-llama/llama-3.1-8b-instruct:free" or "openrouter/free" (auto-router).
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
 OPENROUTER_TEMPERATURE = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.7"))
 OPENROUTER_MAX_TOKENS = int(os.environ.get("OPENROUTER_MAX_TOKENS", "500"))
 
@@ -35,19 +34,9 @@ PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medi
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Hugging Face token for embeddings
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-DATABASE_URL = os.environ.get("NEON_DATABASE_URL")  # Neon Postgres connection string
-
 SYSTEM_PROMPT = (
-    "You are the CRSI Journal assistant. You must answer strictly using the CONTEXT "
-    "provided below each question - that context comes from the official CRSI Journal "
-    "documents. Do not use outside/general knowledge about academic publishing in general; "
-    "only use what is explicitly stated in the context. "
-    "If the context does not contain the answer, say clearly that you don't have that "
-    "specific information and suggest the user contact the journal directly, rather than "
-    "guessing or giving generic advice. "
-    "If the context includes a URL that is directly relevant to the question (e.g. a "
-    "submission page, guidelines page, or tracking portal), include that exact URL in your "
-    "answer. Do not invent or add a link that isn't present in the context. "
+    "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
+    "tracking submissions, and publication charges. Use the provided context if relevant. "
     "Do not mention your internal tools or data sources."
 )
 
@@ -69,7 +58,7 @@ def get_embedding(text):
     return embedding
 
 
-def query_pinecone(vector, top_k=6):
+def query_pinecone(vector, top_k=4):
     """Query Pinecone for the most relevant chunks.
     Returns an empty list (instead of raising) on any failure, so the chatbot still
     answers using general knowledge rather than erroring out."""
@@ -88,67 +77,25 @@ def query_pinecone(vector, top_k=6):
         return []
 
 
-def get_chat_history(session_id, limit=10):
-    """Fetch recent chat history for this session from Neon."""
-    if not DATABASE_URL:
-        return []
-    conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT user_input, bot_response FROM chat_histories
-                WHERE session_id = %s
-                ORDER BY id DESC
-                LIMIT %s
-                """,
-                (session_id, limit),
-            )
-            rows = cur.fetchall()
-        return list(reversed(rows))
-    finally:
-        conn.close()
-
-
-def save_exchange(session_id, user_input, bot_response):
-    """Save one full exchange (user input + bot response) as a single row."""
-    if not DATABASE_URL:
-        return
-    conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO chat_histories (session_id, user_input, bot_response)
-                VALUES (%s, %s, %s)
-                """,
-                (session_id, user_input, bot_response),
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def call_openrouter(user_message, context_chunks, history):
+def call_openrouter(user_message, context_chunks):
     """Call OpenRouter's chat completions API (OpenAI-compatible format) with
-    system prompt, retrieved context, and chat history."""
+    system prompt and retrieved context."""
     context_text = "\n\n".join(context_chunks) if context_chunks else ""
 
     final_user_text = user_message
     if context_text:
         final_user_text = f"Context:\n{context_text}\n\nQuestion: {user_message}"
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for user_input, bot_response in history:
-        messages.append({"role": "user", "content": user_input})
-        messages.append({"role": "assistant", "content": bot_response})
-    messages.append({"role": "user", "content": final_user_text})
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": final_user_text},
+    ]
 
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 500,
+        "max_tokens": 280,
     }
 
     response = requests.post(
@@ -170,7 +117,6 @@ def chat():
     try:
         data = request.get_json(force=True)
         user_message = data.get("chatInput", "")
-        session_id = data.get("sessionId", "default-session")
 
         if not user_message:
             return jsonify({"output": "I didn't receive a message. Could you try again?"}), 400
@@ -184,14 +130,8 @@ def chat():
         except Exception:
             app.logger.exception("Embedding step failed - continuing without retrieved context")
 
-        # 3. Get recent chat history
-        history = get_chat_history(session_id)
-
-        # 4. Call OpenRouter
-        reply = call_openrouter(user_message, context_chunks, history)
-
-        # 5. Save this exchange
-        save_exchange(session_id, user_message, reply)
+        # 3. Call OpenRouter
+        reply = call_openrouter(user_message, context_chunks)
 
         return jsonify({"output": reply})
 
