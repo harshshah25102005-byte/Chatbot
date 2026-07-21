@@ -35,13 +35,19 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # Hugging Face token for embeddings
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 SYSTEM_PROMPT = (
+SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. You must answer strictly using the CONTEXT "
     "provided below each question - that context comes from the official CRSI Journal "
     "documents. Do not use outside/general knowledge about academic publishing in general; "
     "only use what is explicitly stated in the context. "
     "If the context does not contain the answer, say clearly that you don't have that "
     "specific information and suggest the user contact the journal directly, rather than "
+    "guessing or giving generic advice. "
+    "If the context includes a URL that is directly relevant to the question (e.g. a "
+    "submission page, guidelines page, or tracking portal), include that exact URL in your "
+    "answer. Do not invent or add a link that isn't present in the context. "
     "Do not mention your internal tools or data sources."
+)
 )
 
 
@@ -62,7 +68,7 @@ def get_embedding(text):
     return embedding
 
 
-def query_pinecone(vector, top_k=4):
+def query_pinecone(vector, top_k=6):
     """Query Pinecone for the most relevant chunks.
     Returns an empty list (instead of raising) on any failure, so the chatbot still
     answers using general knowledge rather than erroring out."""
