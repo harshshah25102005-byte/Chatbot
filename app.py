@@ -15,7 +15,6 @@ app = Flask(__name__)
 # Only allow requests from your actual site - replace this with your real domain(s).
 # Include both with and without "www." if your site uses either.
 ALLOWED_ORIGINS = [
-    "extraordinary-puffpuff-751ad7.netlify.app",
     "https://digitaldb.in",
     "http://localhost:8000"
 ]
@@ -140,7 +139,7 @@ def call_openrouter(user_message, context_chunks, history):
         "model": OPENROUTER_MODEL,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 280,
+        "max_tokens": 150,
     }
 
     response = requests.post(
