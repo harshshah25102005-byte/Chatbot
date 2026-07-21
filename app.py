@@ -97,6 +97,19 @@ def query_pinecone(vector, top_k=PINECONE_TOP_K):
         return []
 
 
+def query_pinecone_raw(vector, top_k=PINECONE_TOP_K):
+    """Same as query_pinecone but re-raises errors and returns full match objects
+    (score + metadata), for debugging only - not used in the main chat flow."""
+    response = requests.post(
+        f"{PINECONE_INDEX_HOST}/query",
+        headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
+        json={"vector": vector, "topK": top_k, "includeMetadata": True},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json().get("matches", [])
+
+
 def get_chat_history(session_id, limit=CHAT_HISTORY_LIMIT):
     """Fetch recent chat history for this session from Neon."""
     if not DATABASE_URL:
@@ -216,6 +229,52 @@ def chat():
     except Exception:
         app.logger.exception("Error in /webhook/chat")
         return jsonify({"output": "Sorry, something went wrong on my end. Please try again in a moment."}), 500
+
+
+@app.route("/debug/retrieve", methods=["GET"])
+def debug_retrieve():
+    """
+    Debug-only route: bypasses OpenRouter entirely and shows you exactly what
+    Pinecone returns for a given query, plus each match's similarity score.
+    Usage: GET /debug/retrieve?q=publication%20charges
+
+    Remove or protect this route before going fully to production, since it
+    exposes raw chunk text from your index.
+    """
+    query_text = request.args.get("q", "")
+    if not query_text:
+        return jsonify({"error": "pass a query string, e.g. /debug/retrieve?q=publication charges"}), 400
+
+    debug_info = {"query": query_text}
+
+    # Step 1: embedding
+    try:
+        vector = get_embedding(query_text)
+        debug_info["embedding_ok"] = True
+        debug_info["embedding_length"] = len(vector)
+    except Exception as e:
+        debug_info["embedding_ok"] = False
+        debug_info["embedding_error"] = str(e)
+        return jsonify(debug_info), 200
+
+    # Step 2: pinecone query (raw, errors not swallowed)
+    try:
+        matches = query_pinecone_raw(vector, top_k=PINECONE_TOP_K)
+        debug_info["pinecone_ok"] = True
+        debug_info["match_count"] = len(matches)
+        debug_info["matches"] = [
+            {
+                "score": m.get("score"),
+                "id": m.get("id"),
+                "text_preview": (m.get("metadata", {}).get("text", "") or "")[:300],
+            }
+            for m in matches
+        ]
+    except Exception as e:
+        debug_info["pinecone_ok"] = False
+        debug_info["pinecone_error"] = str(e)
+
+    return jsonify(debug_info), 200
 
 
 @app.route("/health", methods=["GET"])
