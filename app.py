@@ -15,6 +15,7 @@ app = Flask(__name__)
 # Only allow requests from your actual site - replace this with your real domain(s).
 # Include both with and without "www." if your site uses either.
 ALLOWED_ORIGINS = [
+    "extraordinary-puffpuff-751ad7.netlify.app",
     "https://digitaldb.in",
     "http://localhost:8000"
 ]
@@ -24,7 +25,7 @@ CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 # Any OpenRouter model slug works here. Use a ":free" model if you want $0 cost,
 # e.g. "meta-llama/llama-3.1-8b-instruct:free" or "openrouter/free" (auto-router).
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
 OPENROUTER_TEMPERATURE = float(os.environ.get("OPENROUTER_TEMPERATURE", "0.7"))
 OPENROUTER_MAX_TOKENS = int(os.environ.get("OPENROUTER_MAX_TOKENS", "500"))
 
@@ -37,8 +38,16 @@ HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DATABASE_URL = os.environ.get("NEON_DATABASE_URL")  # Neon Postgres connection string
 
 SYSTEM_PROMPT = (
-    "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
-    "tracking submissions, and publication charges. Use the provided context if relevant. "
+    "You are the CRSI Journal assistant. You must answer strictly using the CONTEXT "
+    "provided below each question - that context comes from the official CRSI Journal "
+    "documents. Do not use outside/general knowledge about academic publishing in general; "
+    "only use what is explicitly stated in the context. "
+    "If the context does not contain the answer, say clearly that you don't have that "
+    "specific information and suggest the user contact the journal directly, rather than "
+    "guessing or giving generic advice. "
+    "If the context includes a URL that is directly relevant to the question (e.g. a "
+    "submission page, guidelines page, or tracking portal), include that exact URL in your "
+    "answer. Do not invent or add a link that isn't present in the context. "
     "Do not mention your internal tools or data sources."
 )
 
@@ -60,7 +69,7 @@ def get_embedding(text):
     return embedding
 
 
-def query_pinecone(vector, top_k=4):
+def query_pinecone(vector, top_k=6):
     """Query Pinecone for the most relevant chunks.
     Returns an empty list (instead of raising) on any failure, so the chatbot still
     answers using general knowledge rather than erroring out."""
@@ -139,7 +148,7 @@ def call_openrouter(user_message, context_chunks, history):
         "model": OPENROUTER_MODEL,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 150,
+        "max_tokens": 500,
     }
 
     response = requests.post(
