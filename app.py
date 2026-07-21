@@ -36,7 +36,7 @@ PINECONE_INDEX_HOST = os.environ.get("PINECONE_INDEX_HOST")  # e.g. https://medi
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Hugging Face token for embeddings
 HF_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-DATABASE_URL = os.environ.get("DATABASE_URL")  # Neon Postgres connection string
+DATABASE_URL = os.environ.get("NEON_DATABASE_URL")  # Neon Postgres connection string
 
 SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
@@ -191,6 +191,23 @@ def chat():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/debug-save-test", methods=["GET"])
+def debug_save_test():
+    """TEMPORARY - directly tests save_exchange and get_chat_history, returning the
+    real error if anything fails, to see exactly what's happening."""
+    try:
+        save_exchange("debug-test-session", "test input", "test output")
+    except Exception as e:
+        return jsonify({"step": "save_exchange", "error": str(e)}), 500
+
+    try:
+        rows = get_chat_history("debug-test-session")
+    except Exception as e:
+        return jsonify({"step": "get_chat_history", "error": str(e)}), 500
+
+    return jsonify({"status": "ok", "rows_found": len(rows), "rows": rows})
 
 
 if __name__ == "__main__":
