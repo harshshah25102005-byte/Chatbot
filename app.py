@@ -9,7 +9,6 @@ import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2
-from psycopg2.extras import Json
 
 app = Flask(__name__)
 
@@ -41,10 +40,6 @@ DATABASE_URL = os.environ.get("NEON_DATABASE_URL")  # Neon Postgres connection s
 SYSTEM_PROMPT = (
     "You are the CRSI Journal assistant. Answer questions about submitting a paper, "
     "tracking submissions, and publication charges. Use the provided context if relevant. "
-    "If the context includes a URL that is directly relevant to answering the user's question "
-    "(e.g. a submission page, guidelines page, or tracking portal), include that exact URL in your "
-    "answer so the user can click through to it. Only include a link when it genuinely helps answer "
-    "what was asked - never add a link that isn't relevant just to have one. "
     "Do not mention your internal tools or data sources."
 )
 
@@ -67,16 +62,22 @@ def get_embedding(text):
 
 
 def query_pinecone(vector, top_k=4):
-    """Query Pinecone for the most relevant chunks."""
-    response = requests.post(
-        f"{PINECONE_INDEX_HOST}/query",
-        headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
-        json={"vector": vector, "topK": top_k, "includeMetadata": True},
-        timeout=30,
-    )
-    response.raise_for_status()
-    matches = response.json().get("matches", [])
-    return [m.get("metadata", {}).get("text", "") for m in matches if m.get("metadata")]
+    """Query Pinecone for the most relevant chunks.
+    Returns an empty list (instead of raising) on any failure, so the chatbot still
+    answers using general knowledge rather than erroring out."""
+    try:
+        response = requests.post(
+            f"{PINECONE_INDEX_HOST}/query",
+            headers={"Api-Key": PINECONE_API_KEY, "Content-Type": "application/json"},
+            json={"vector": vector, "topK": top_k, "includeMetadata": True},
+            timeout=30,
+        )
+        response.raise_for_status()
+        matches = response.json().get("matches", [])
+        return [m.get("metadata", {}).get("text", "") for m in matches if m.get("metadata")]
+    except Exception:
+        app.logger.exception("query_pinecone failed - continuing without retrieved context")
+        return []
 
 
 def get_chat_history(session_id, limit=10):
@@ -122,7 +123,7 @@ def save_exchange(session_id, user_input, bot_response):
 
 def call_openrouter(user_message, context_chunks, history):
     """Call OpenRouter's chat completions API (OpenAI-compatible format) with
-    system prompt and retrieved context."""
+    system prompt, retrieved context, and chat history."""
     context_text = "\n\n".join(context_chunks) if context_chunks else ""
 
     final_user_text = user_message
@@ -138,8 +139,8 @@ def call_openrouter(user_message, context_chunks, history):
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": messages,
-        "temperature": OPENROUTER_TEMPERATURE,
-        "max_tokens": OPENROUTER_MAX_TOKENS,
+        "temperature": 0.2,
+        "max_tokens": 280,
     }
 
     response = requests.post(
@@ -166,11 +167,14 @@ def chat():
         if not user_message:
             return jsonify({"output": "I didn't receive a message. Could you try again?"}), 400
 
-        # 1. Embed the user's question
-        vector = get_embedding(user_message)
-
-        # 2. Retrieve relevant chunks from Pinecone
-        context_chunks = query_pinecone(vector)
+        # 1. Embed the user's question (skip retrieval entirely if this fails)
+        context_chunks = []
+        try:
+            vector = get_embedding(user_message)
+            # 2. Retrieve relevant chunks from Pinecone
+            context_chunks = query_pinecone(vector)
+        except Exception:
+            app.logger.exception("Embedding step failed - continuing without retrieved context")
 
         # 3. Get recent chat history
         history = get_chat_history(session_id)
@@ -185,29 +189,12 @@ def chat():
 
     except Exception as e:
         app.logger.exception("Error in /webhook/chat")
-        return jsonify({"output": "Error: " + str(e)}), 500
+        return jsonify({"output": "Sorry, something went wrong on my end. Please try again in a moment."}), 500
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
-
-
-@app.route("/debug-save-test", methods=["GET"])
-def debug_save_test():
-    """TEMPORARY - directly tests save_exchange and get_chat_history, returning the
-    real error if anything fails, to see exactly what's happening."""
-    try:
-        save_exchange("debug-test-session", "test input", "test output")
-    except Exception as e:
-        return jsonify({"step": "save_exchange", "error": str(e)}), 500
-
-    try:
-        rows = get_chat_history("debug-test-session")
-    except Exception as e:
-        return jsonify({"step": "get_chat_history", "error": str(e)}), 500
-
-    return jsonify({"status": "ok", "rows_found": len(rows), "rows": rows})
 
 
 if __name__ == "__main__":
