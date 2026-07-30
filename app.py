@@ -47,16 +47,7 @@ CHAT_HISTORY_LIMIT = int(os.environ.get("CHAT_HISTORY_LIMIT", "6"))  # turns, no
 # version had two instructions spliced into each other mid-sentence, which
 # produced confusing/self-contradictory guidance for the model.
 SYSTEM_PROMPT = (
-    "You are the CRSI Journal assistant. Answer strictly using the CONTEXT provided "
-    "below each question - that context comes from the official CRSI Journal documents. "
-    "Do not use outside or general knowledge about academic publishing; only use what is "
-    "explicitly stated in the context. "
-    "If the context includes a URL that is directly relevant to the question (for example "
-    "a submission page, guidelines page, or tracking portal), include that exact URL in "
-    "your answer. Do not invent or add a link that isn't present in the context. "
-    "If the context does not contain the answer, say clearly that you don't have that "
-    "specific information and suggest the user contact the journal directly, rather than "
-    "guessing or giving generic advice. "
+    "LINKS: Whenever the search results contain a URL relevant to the user's question, you MUST format it as a Markdown link: [descriptive text](URL) — for example [Submit your paper here](https://cosmorsij.com/submit-paper). NEVER write a bare URL by itself (e.g. "https://cosmorsij.com/submit-paper" alone is WRONG). Only use a URL that appears exactly in the search results — never invent one."
     "Do not mention your internal tools or data sources."
 )
 
