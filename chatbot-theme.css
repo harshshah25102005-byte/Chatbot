@@ -1,0 +1,372 @@
+/* ==========================================================================
+   CRSIJ Chatbot Modern Theme
+   Colors: Navy #0b3c78 | White | Black
+   ========================================================================== */
+
+:root {
+  --chat--color-primary: #0b3c78;
+  --chat--color-secondary: #0b3c78;
+  --chat--color-white: #ffffff;
+  --chat--color-light: #f5f5f5;
+  --chat--color-dark: #000000;
+
+  --chat--border-radius: 16px;
+
+  --chat--message--bot--background: #ffffff;
+  --chat--message--bot--color: #000000;
+
+  --chat--message--user--background: #0b3c78;
+  --chat--message--user--color: #ffffff;
+
+  --chat--header--background: #0b3c78;
+  --chat--header--color: #ffffff;
+
+  --chat--font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ======================================================
+   CHAT WINDOW
+====================================================== */
+
+.n8n-chat,
+.chat-window,
+.chat-layout {
+  border-radius: 18px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(11,60,120,.15) !important;
+  box-shadow: 0 14px 40px rgba(0,0,0,.18) !important;
+}
+
+/* ======================================================
+   HEADER
+====================================================== */
+
+.chat-header {
+  background: #0b3c78 !important;
+  color: white !important;
+  padding: 14px 18px !important;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+}
+
+.chat-header img {
+  height: 40px !important;
+  width: auto !important;
+}
+
+.chat-header h1,
+.chat-header .chat-title {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  color: white !important;
+}
+
+/* ======================================================
+   CHAT BACKGROUND
+====================================================== */
+
+.chat-body,
+.chat-messages {
+  background: #f8f9fb !important;
+  padding: 16px !important;
+}
+
+/* ======================================================
+   BOT MESSAGE
+====================================================== */
+
+.chat-message-from-bot,
+.chat-message.bot,
+.chat-message.received {
+  background: white !important;
+  color: black !important;
+
+  border-radius: 16px !important;
+
+  padding: 13px 16px !important;
+
+  border: 1px solid rgba(0,0,0,.06);
+
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+
+  max-width: 82% !important;
+}
+
+/* ======================================================
+   USER MESSAGE
+====================================================== */
+
+.chat-message-from-user,
+.chat-message.user,
+.chat-message.sent {
+  background: #0b3c78 !important;
+  color: white !important;
+
+  border-radius: 16px !important;
+
+  padding: 13px 16px !important;
+
+  box-shadow: 0 4px 14px rgba(11,60,120,.25);
+
+  max-width: 75% !important;
+}
+
+/* ======================================================
+   MESSAGE TEXT
+====================================================== */
+
+.chat-message {
+  margin-bottom: 14px !important;
+  animation: fadeIn .25s ease;
+}
+
+.chat-message p {
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+/* ======================================================
+   INPUT
+====================================================== */
+
+.chat-input {
+  background: white !important;
+  border-top: 1px solid #e7e7e7;
+  padding: 14px !important;
+}
+
+.chat-input textarea,
+.chat-input input,
+.chat-input textarea:focus,
+.chat-input input:focus {
+
+  color: black !important;
+  background: white !important;
+
+  border: 1px solid #d6d6d6 !important;
+
+  border-radius: 12px !important;
+
+  padding: 12px 15px !important;
+
+  font-size: 15px !important;
+
+  font-family: var(--chat--font-family);
+
+  caret-color: #0b3c78 !important;
+
+  outline: none !important;
+
+  transition: .2s;
+}
+
+.chat-input textarea:focus,
+.chat-input input:focus {
+
+  border-color: #0b3c78 !important;
+
+  box-shadow: 0 0 0 3px rgba(11,60,120,.15);
+}
+
+.chat-input textarea::placeholder,
+.chat-input input::placeholder {
+
+  color: #888 !important;
+}
+
+/* ======================================================
+   SEND BUTTON
+====================================================== */
+
+.chat-input button {
+
+  background: #0b3c78 !important;
+
+  color: white !important;
+
+  border-radius: 12px !important;
+
+  transition: .2s;
+
+  box-shadow: 0 3px 10px rgba(11,60,120,.2);
+}
+
+.chat-input button:hover {
+
+  transform: scale(1.05);
+
+  background: #0d478d !important;
+}
+
+/* ======================================================
+   SCROLLBAR
+====================================================== */
+
+.chat-body::-webkit-scrollbar,
+.chat-messages::-webkit-scrollbar {
+
+  width: 6px;
+}
+
+.chat-body::-webkit-scrollbar-thumb,
+.chat-messages::-webkit-scrollbar-thumb {
+
+  background: rgba(11,60,120,.35);
+
+  border-radius: 50px;
+}
+
+/* ======================================================
+   LINKS
+====================================================== */
+
+.chat-message a {
+
+  color: #0b3c78;
+
+  font-weight: 600;
+}
+
+/* ======================================================
+   ANIMATION
+====================================================== */
+
+@keyframes fadeIn {
+
+  from {
+
+    opacity: 0;
+
+    transform: translateY(8px);
+  }
+
+  to {
+
+    opacity: 1;
+
+    transform: translateY(0);
+  }
+}
+
+/* ======================================================
+   MOBILE
+====================================================== */
+
+@media (max-width: 600px) {
+
+  .n8n-chat,
+  .chat-window,
+  .chat-layout {
+
+    width: calc(100vw - 20px) !important;
+
+    height: 82vh !important;
+
+    max-width: none !important;
+
+    right: 10px !important;
+
+    left: 10px !important;
+
+    bottom: 10px !important;
+
+    border-radius: 18px !important;
+  }
+
+  .chat-header {
+
+    padding: 12px 14px !important;
+  }
+
+  .chat-header img {
+
+    height: 34px !important;
+  }
+
+  .chat-body,
+  .chat-messages {
+
+    padding: 12px !important;
+  }
+
+  .chat-input {
+
+    padding: 10px !important;
+  }
+
+  .chat-input textarea,
+  .chat-input input {
+
+    font-size: 16px !important;
+  }
+
+  .chat-message-from-user,
+  .chat-message-from-bot,
+  .chat-message.user,
+  .chat-message.bot,
+  .chat-message.sent,
+  .chat-message.received {
+
+    max-width: 90% !important;
+
+    font-size: 14px !important;
+  }
+}
+
+/* =========================================
+   CLEAN PROFESSIONAL HEADER
+========================================= */
+.chat-header {
+    padding: 10px 14px !important;
+    background: #0b3c78 !important;
+}
+.crsi-header-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.crsi-text-wrap {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.crsi-main-title {
+    color: #ffffff;
+    font-weight: 700;
+    line-height: 1.1;
+}
+.crsi-subtitle {
+    color: rgba(255,255,255,0.75);
+    font-weight: 400;
+    line-height: 1.1;
+}
+/* ================= DESKTOP ================= */
+@media (min-width: 601px) {
+    .crsi-logo-img {
+        width: 52px !important;
+        height: 52px !important;
+        object-fit: contain !important;
+        display: block;
+    }
+    .crsi-main-title {
+        font-size: 18px;
+    }
+    .crsi-subtitle {
+        font-size: 12px;
+    }
+}
+/* ================= PHONE ================= */
+@media (max-width: 600px) {
+    .crsi-logo-img {
+        width: 40px !important;
+        height: 40px !important;
+        object-fit: contain !important;
+        display: block;
+    }
+    .crsi-main-title {
+        font-size: 16px;
+    }
+    .crsi-subtitle {
+        font-size: 11px;
+    }
+}
